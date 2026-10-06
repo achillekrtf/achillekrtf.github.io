@@ -1,6 +1,6 @@
 ---
-title: "Financial ML on SPY, with VIX-adaptive triple barriers"
-summary: "Lopez de Prado's AFML pipeline applied to SPY 2010-2023: triple-barrier labels, meta-labeling, purged walk-forward CV, and an original extension that adapts the barriers to the VIX regime."
+title: "Financial ML on the S&P 500: what survived the checks"
+summary: "Lopez de Prado's AFML pipeline with VIX-scaled triple barriers and meta-labeling, built twice: a first version on SPY that looked good, and a stricter rebuild on 26 years of out-of-sample data that found no edge."
 tags: ["Quant", "Machine learning", "Backtest"]
 date: "2026"
 order: 1
@@ -8,44 +8,90 @@ shape: "bars"
 repo: "https://github.com/achillekrtf/AFML_Public"
 ---
 
-Most machine-learning approaches to price prediction fail for reasons that have nothing to do with the model: noisy fixed-horizon labels, cross-validation folds that leak future information, and backtests that trade on a signal before it could have existed. This project implements the framework from Marcos Lopez de Prado's *Advances in Financial Machine Learning* step by step, on SPY from 2010 to 2023, and adds one extension of my own.
+Marcos Lopez de Prado's *Advances in Financial Machine Learning* is a catalogue of the ways a trading backtest lies: labels on a fixed horizon, cross-validation folds that see the future, signals traded before they existed. I implemented its core ideas twice. The first version, on SPY, produced a Sharpe ratio of 0.89 and a drawdown three times smaller than the market's. Reviewing it carefully took most of that result apart, and a stricter rebuild on the S&P 500 since 1990 confirmed why. This page covers both versions.
 
-## Pipeline
+## Version 1: SPY, 2010 to 2023
 
-| Step | Method | Why it matters |
-|---|---|---|
-| 1 | Triple-barrier labeling | Labels scaled to each day's volatility |
-| 2 | **VIX-adaptive barriers** | Asymmetric profit and stop thresholds by market regime (my extension) |
-| 3 | Meta-labeling | Separates *direction* (simple model) from *confidence* (ML model) |
-| 4 | Purged walk-forward CV | Time-respecting folds with an embargo gap |
-| 5 | RF + XGBoost ensemble | Decision threshold tuned to maximise the Sharpe ratio |
-| 6 | Realistic backtest | 1-day signal lag, 5 bps costs, probability-weighted sizing |
+| Step | What it does |
+|---|---|
+| Data | Daily SPY prices (dividend-adjusted) and the VIX close, 2010 to 2023 |
+| Labels | Triple barrier: a profit-take, a stop-loss and a 21-day time limit, scaled by 20-day realised volatility |
+| VIX regime | Above its expanding median, the VIX switches the barriers from symmetric (1.5 / 1.5) to asymmetric (2.0 / 1.0) |
+| Primary model | SMA5 above SMA20 means long, otherwise flat |
+| Meta model | Random forest and XGBoost, averaged, predict the probability that the primary signal is right |
+| Validation | Expanding-window CV with a 69-day embargo, then one held-out test window from 2021 to 2023 |
+| Backtest | Position sized by the meta probability, one-day lag, 5 bps per unit of turnover |
+
+The idea behind meta-labeling is to split the problem in two: a simple rule decides the direction, and a classifier decides how much to trust it. The VIX regime switch was my own addition: in stressed markets, let winners run and cut losers faster.
 
 ![Triple-barrier labeling on SPY](/images/afml/02_triple_barrier.png)
 
-## The extension: VIX-adaptive barriers
+On the test window, the sized strategy returned 16.7% with a Sharpe of 0.89 and a maximum drawdown of -8.9%, against 27.4%, 0.58 and -24.5% for buy and hold.
 
-The standard triple barrier uses symmetric, fixed multipliers. In stressed regimes that produces many timeouts, which are uninformative labels. Here the barrier widths follow the VIX regime, using an expanding median so that each day only sees the past:
+## What the checks showed
 
-```text
-High VIX:  profit-take = 2.0 x vol,  stop-loss = 1.0 x vol   (let winners run, cut losses fast)
-Low VIX:   profit-take = 1.5 x vol,  stop-loss = 1.5 x vol   (balanced)
-```
+The same backtest also logged two other curves, and they change the reading completely.
 
-Timeout labels drop from **22% to 2%**: almost every sample gets a directional label.
+<Metrics items={[["0.98", "Sharpe, SMA rule alone"], ["0.89", "Sharpe, with the ML layer"], ["46%", "Meta model test accuracy"], ["53%", "Majority-class rate"]]} />
 
-![Label distribution with VIX-adaptive barriers](/images/afml/03_label_distribution.png)
+![Backtest: sized meta strategy, binary meta, primary only and buy & hold](/images/afml/08_backtest_curve.png)
 
-## Results
+- **The moving-average rule alone did better.** SMA5/SMA20 long-or-flat, with no machine learning at all, returned 33.6% with a Sharpe of 0.98. The ML layer lowered both.
+- **The filter filtered nothing.** The decision threshold was tuned on the CV folds and landed at 0.30, the lowest value in the grid. At that level the meta model approves almost every trade, which is why the binary version of the strategy is identical to the primary rule.
+- **The smaller drawdown came from smaller positions.** The sized strategy was invested 36.5% of the time on average. Holding 36.5% of SPY and the rest in cash gives roughly the same -8.9% drawdown. Sharpe per unit of exposure, which I had reported at first, is not a meaningful metric, since the Sharpe ratio does not change when exposure is scaled.
+- **The classifier was worse than a constant.** On the test window it was right 46% of the time, below the 53% obtained by always predicting the most frequent class. Mean accuracy across the CV folds was 51%.
 
-<Metrics items={[["0.89", "Sharpe (0.58 buy & hold)"], ["-8.9%", "Max drawdown (-24.5%)"], ["36.5%", "Average exposure"], ["2.44", "Sharpe per unit of exposure"]]} />
+![Confusion matrix of the meta model on the test window](/images/afml/07_confusion_matrix.png)
 
-![Backtest: meta strategy against buy & hold](/images/afml/08_backtest_curve.png)
+The test was also a single window of 694 days, from 2021 to 2023, and the VIX multipliers were chosen by hand. One version of the pipeline had also used a full-sample VIX median to define the regime, which leaks the future; the expanding median above replaced it.
 
-Total return is lower than buy & hold (16.7% against 27.4%), but per unit of capital deployed the strategy is about four times more efficient on a risk-adjusted basis, and the capital it leaves free can carry other, uncorrelated strategies.
+## Version 2: the S&P 500 since 1990
 
-## Honesty check
+The rebuild fixed every weakness I could identify in the first version, and tested the idea on a much longer history.
 
-Without the one-day signal lag, the same pipeline shows a Sharpe above 2.0. With the lag, which is what a real trader would face, it is 0.89. That gap is the most common source of false alpha in financial ML papers, and the reason every number above is computed with the lag.
+- **Data:** the S&P 500 index and the VIX from 1990, with every prediction made out of sample from 2000 to 2026.
+- **Labels:** barriers at ±k · VIX/100 · √(H/252), so their width comes directly from the VIX, with a vertical barrier at H days.
+- **Training:** XGBoost refitted every year on an expanding window, keeping only labels that resolved before the test year begins.
+- **Weights and sizing:** sample weights from label uniqueness (AFML chapter 4), and bet sizing with 2Φ(z) − 1 averaged over active bets (chapter 10).
+- **Execution:** signal at the close of day t, executed at the close of t+1, 2 bps per unit of turnover.
 
-![Feature importance](/images/afml/06_feature_importance.png)
+The answer was unambiguous.
+
+<Metrics items={[["0.50", "Out-of-sample AUC, 2000-2026"], ["-0.04", "Sharpe, long/short"], ["0.31", "Sharpe, long/flat"], ["0.43", "Sharpe, buy & hold"]]} />
+
+An AUC of 0.50 means the model ranks up and down outcomes no better than chance. Its log loss was worse than that of a constant forecast, and its accuracy (51%) was below the 59.5% obtained by always predicting "up". The year-by-year AUC wanders between 0.37 and 0.63 with no persistent edge.
+
+![XGBoost on VIX-scaled triple barriers, S&P 500, out of sample from 2000](/images/mldp/xgb-backtest.png)
+
+### Meta-labeling, tested properly
+
+I then put the meta model on top of five primary rules: the 50/200-day moving-average crossover, 12-1 time-series momentum, price above its 200-day average, 5-day reversal and always long.
+
+With long/short primaries, the meta filter seemed to help: the 200-day rule went from a Sharpe of 0.22 to 0.49. Almost all of that gain came from one thing: the filter mostly removed the short trades, which lose money in a market that rises over time. With long-or-flat primaries, where that effect disappears, the filter made every rule worse:
+
+| Primary rule (long or flat) | Primary alone | With meta filter |
+|---|---|---|
+| MA 50/200 crossover | 0.56 | 0.43 |
+| 12-1 momentum | 0.52 | 0.31 |
+| Price above MA 200 | 0.55 | 0.18 |
+| 5-day reversal | 0.49 | 0.36 |
+| Always long | 0.43 | 0.25 |
+
+The meta model's AUC on these primaries was between 0.49 and 0.52.
+
+![Long-or-flat primary rules with and without the meta filter](/images/mldp/meta-long-flat.png)
+
+### More VIX information
+
+Two more extensions tested whether the VIX carried more information than its level. Adding the VIX term structure (VIX9D, VIX3M, VIX6M and VVIX) moved the AUC from 0.496 to 0.499. Making the vertical barrier shorter or longer depending on the slope of the term structure produced no configuration that beat buy and hold over 2013 to 2026 (Sharpe 0.81).
+
+Two results along the way looked like discoveries and were bugs. A long/flat PnL computed only on days with a position skipped the flat days and produced Sharpe ratios of 1.82 and -4.19. A gap of a few days in the VVIX series emptied a rolling z-score for a whole year, which removed 2020 and 2021 from the sample and produced an AUC of 0.61. Both disappeared once fixed.
+
+## What I take from it
+
+- **Always backtest the primary rule alone.** In both versions, the simple rule without ML was the benchmark to beat, and the ML layer did not beat it.
+- **A filter needs to be checked for what it removes.** The apparent value of meta-labeling came from cutting short trades in a rising market, which a one-line rule can do for free.
+- **Lower exposure is cheap risk reduction.** A smaller drawdown is only worth something if a simple cash allocation cannot match it.
+- **Suspiciously good numbers deserve a bug hunt first.** Both of the striking results in the rebuild came from data handling.
+
+After more than a hundred configurations, the best daily strategy on the S&P 500 in these tests remained a plain long-or-flat trend rule. The framework from the book is what made it possible to reach that conclusion with some confidence.
