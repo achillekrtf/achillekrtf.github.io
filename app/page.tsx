@@ -79,36 +79,6 @@ export default function Home() {
       </section>
       )}
 
-      {/* How I build */}
-      <section className="mx-auto max-w-6xl px-6 pt-32">
-        <SectionHead label="Practice" title="How I build" />
-        <div className="grid gap-px overflow-hidden rounded-2xl border border-line bg-line md:grid-cols-3">
-          {[
-            {
-              k: "01",
-              t: "Agentic coding",
-              d: "Coding agents in the loop every day: tests as the contract, one concern per pull request, and the merge stays a human decision.",
-            },
-            {
-              k: "02",
-              t: "Skills",
-              d: "Recurring work packaged as versioned skills: warehouse queries, on-chain analytics on Dune, reporting and triage, each with its own checks.",
-            },
-            {
-              k: "03",
-              t: "Infrastructure as code",
-              d: "Terraform on GCP, planned in every pull request and applied from CI, with remote state, small modules and least-privilege service accounts.",
-            },
-          ].map((c) => (
-            <div key={c.k} className="bg-ink p-8">
-              <span className="label">{c.k}</span>
-              <h3 className="mt-6 text-2xl font-light text-fg">{c.t}</h3>
-              <p className="mt-3 text-muted">{c.d}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
       {/* Path */}
       <section className="mx-auto max-w-6xl px-6 pt-32">
         <SectionHead label="Path" title="Education & experience" />
