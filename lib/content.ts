@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import matter from "gray-matter";
+import { parse } from "yaml";
 
 export type Kind = "projects" | "articles";
 
@@ -19,6 +19,13 @@ export interface Entry {
 }
 
 const root = path.join(process.cwd(), "content");
+
+/** Splits a `---` YAML front matter block from the body. */
+function matter(source: string): { data: Record<string, unknown>; content: string } {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(source);
+  if (!m) return { data: {}, content: source };
+  return { data: parse(m[1]) ?? {}, content: source.slice(m[0].length) };
+}
 
 export function entries(kind: Kind): Entry[] {
   const dir = path.join(root, kind);
