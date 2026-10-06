@@ -1,0 +1,114 @@
+---
+title: "Paid to HODL: borrowing against Bitcoin to farm HLP"
+summary: "Hold BTC on Aave, borrow 40% of its value in USDC and park it in Hyperliquid's HLP vault. A daily backtest from 2024 to 2026 shows the overlay beat plain BTC with no deeper drawdown, and that most of its edge now comes from a few crash days."
+tags: ["DeFi", "Bitcoin", "Backtest"]
+date: "2026-10-06"
+repo: "https://github.com/achillekrtf/btc-hlp-carry"
+---
+
+I hold Bitcoin for the long run: fixed supply, a growing base of institutional holders since the spot ETFs, an asset that keeps absorbing shocks. I am not trying to trade it, which also means the coins sit idle and earn nothing. DeFi lets you borrow against BTC without selling it. The usual move is to borrow stablecoins and buy more BTC, which is plain leverage. I wanted to test something else: keep BTC exposure at exactly 1x, and put the borrowed dollars into a yield that does not move with Bitcoin.
+
+HLP, the Hyperliquidity Provider vault, is the obvious candidate. It is the community vault that makes markets and absorbs liquidations on Hyperliquid, the largest onchain perpetuals exchange. Depositors earn its trading PnL in USDC, and that PnL depends on order flow and volatility far more than on the direction of the market.
+
+## The strategy
+
+| Step | What it does |
+|---|---|
+| Collateral | Buy BTC and deposit it on Aave v3 |
+| Loan | Borrow USDC worth 40% of the BTC. Aave liquidates WBTC at 78% loan-to-value, so this leaves a wide buffer |
+| Carry | Deposit the USDC in HLP |
+| Rebalance | Once a month, reset the loan to 40% of the BTC value and sweep any HLP profit above the debt into BTC (or sell a little BTC if HLP is short of the debt) |
+
+Net exposure stays at one Bitcoin per Bitcoin of equity. Everything the overlay adds or loses comes from one number: the spread between HLP's return and the USDC borrow rate, applied to 40% of the portfolio.
+
+The backtest runs day by day on $100,000 from 1 January 2024 to 6 October 2026, with real BTC prices, the daily Aave v3 USDC borrow rate and HLP's own reported PnL. It starts in 2024 because HLP managed less than $15M in 2023 and its early returns are too noisy to use. Two benchmarks: BTC alone, and the same $40k loan used to buy more BTC (1.4x leverage).
+
+## Results
+
+<Metrics items={[["36.5%", "CAGR, BTC + HLP carry"], ["27.1%", "CAGR, BTC buy & hold"], ["−0.01", "Correlation, HLP vs BTC returns"], ["0", "Liquidations with monthly rebalancing"]]} />
+
+![Portfolio value of $100k invested on 1 January 2024](/images/btc-hlp/equity.png)
+
+| Strategy | Final value | CAGR | Volatility | Sharpe | Max drawdown |
+|---|---|---|---|---|---|
+| BTC buy & hold | $193.6k | 27.1% | 47.1% | 0.64 | −53.0% |
+| Carry, 40%, static | $224.5k | 34.1% | 42.3% | 0.78 | −46.6% |
+| **Carry, 40%, monthly** | **$236.2k** | **36.5%** | **46.9%** | **0.79** | **−51.2%** |
+| 1.4x BTC (loan buys BTC) | $198.5k | 28.2% | 66.2% | 0.63 | −67.2% |
+
+The overlay added about 9 points a year over plain BTC, with a slightly smaller drawdown. The comparison with 1.4x BTC is the most telling one. The same $40k loan, pointed at more Bitcoin, finished $5k ahead of buy-and-hold and deepened the worst drawdown to −67%. Pointed at HLP, it finished $43k ahead. When BTC fell 53% from its October 2025 high, the HLP sleeve kept earning, so the loan never added to the losses.
+
+Starting in June 2023 instead gives 57.7% a year against 41.4%, but that comes from HLP's tiny early days and I would not plan on seeing it again.
+
+## Where the return comes from
+
+On the monthly version, HLP earned $51.3k over the period and the loan cost $14.9k in interest. That net carry, reinvested into BTC along the way, accounts for the whole gap with buy-and-hold.
+
+![Cumulative HLP return vs cumulative USDC borrow cost since January 2024](/images/btc-hlp/hlp-vs-borrow.png)
+
+The debt is a smooth, predictable cost. HLP's return comes in steps, and the biggest steps line up with Bitcoin's worst days. Its best two-week windows include the October 2025 flash crash (+8.8% while BTC traded 14% lower within the window) and the February 2026 drop to $60k (+6.7% while BTC lost 18%). Liquidation cascades are when HLP earns the most: it takes over liquidated positions and provides liquidity when other market makers step back.
+
+- **HLP is uncorrelated with BTC.** Across all 2024 to 2026 snapshots, the correlation between HLP and BTC returns is −0.01.
+- **It tends to earn more when BTC crashes.** Against BTC's worst move within each window, the correlation is −0.17.
+- **The recent carry comes almost entirely from those crashes.** Over the last 12 months HLP returned 13%. Without the two crash windows it returned 0.4%, against a 4.6% cost of borrowing.
+
+## The spread is shrinking
+
+![HLP return vs USDC borrow cost by calendar year](/images/btc-hlp/yearly.png)
+
+2024 was exceptional: HLP returned 58% while the vault grew from $11M to $400M. The spread fell to about 11 points in 2025 and is about 4 points so far in 2026, almost all of it from one two-week window in early February. Since mid-February, HLP's PnL has been flat while the loan kept costing around 4.4% a year, so the overlay has been losing money for close to eight months.
+
+That is what more capital chasing the same order flow looks like. HLP now manages between $180M and $600M and competes with professional market makers on a much bigger exchange. I treat 2024 as a one-off and size the strategy around 2025 and 2026.
+
+## Liquidation risk
+
+The monthly rebalance is what kept the strategy safe. After a fall, part of the HLP balance repays part of the loan and the loan-to-value goes back to 40%. Over the whole period, the monthly version never went above 52% LTV.
+
+A static position opened at the wrong moment tells a different story. This one was opened at the BTC high of $124,659 on 6 October 2025 and never touched.
+
+![Loan-to-value of a static 40% position opened at the October 2025 top](/images/btc-hlp/ltv-from-top.png)
+
+It was liquidated on 5 February 2026, when BTC touched $62,345, a 50% fall from entry. Aave closed half the loan and took a 5% penalty on the seized BTC. The smaller position then climbed back to 77.9% LTV on 1 July 2026, 0.1 point short of a second liquidation. A 40% LTV survives a 49% fall in BTC, and Bitcoin has fallen further than that in every previous cycle.
+
+I ran the monthly version at other loan sizes over the same period:
+
+| Loan-to-value | CAGR | Sharpe | Max drawdown | Peak LTV | Liquidations | BTC drop to liquidate |
+|---|---|---|---|---|---|---|
+| 0% (BTC only) | 27.1% | 0.64 | −53.0% | 0% | 0 | never |
+| 20% | 31.7% | 0.71 | −52.1% | 26% | 0 | 74% |
+| 30% | 34.1% | 0.75 | −51.6% | 39% | 0 | 62% |
+| **40%** | **36.5%** | **0.79** | **−51.2%** | **52%** | **0** | **49%** |
+| 50% | 39.0% | 0.83 | −50.7% | 65% | 0 | 36% |
+| 60% | 28.4% | 0.66 | −56.3% | 76% | 4 | 23% |
+| 70% | 17.1% | 0.46 | −57.9% | 82% | 16 | 10% |
+
+Returns rise steadily up to 50%, then collapse: at 60%, an ordinary one-month BTC move is enough to trigger liquidations. 50% was the best row in this sample, but Bitcoin has dropped 36% in a single month several times in its history. I would stay between 30% and 40%.
+
+The start date mattered less than I expected. Over 62 one-year windows starting every two weeks from June 2023, the monthly carry beat plain BTC in all of them, by 5.8 points at the median and 2.8 points at worst. The best window, +82 points, started in 2023 when HLP was still small.
+
+## What the backtest does not capture
+
+- **An HLP blow-up.** HLP lost $4M in March 2025 when a whale used leverage to exit a large ETH position, and was squeezed on JELLY later that month until validators delisted the market. Neither shows up as a large loss in the data. Forcing a 20% one-day HLP loss into the simulation cuts final equity by 7.3%. A total loss of the sleeve would cost 40% of starting equity while the BTC loan is still owed.
+- **The 4-day lockup.** HLP deposits are locked for four days, so in a crash the USDC cannot come out the same day to repay the loan. An emergency buffer has to sit outside HLP.
+- **Borrow rate spikes.** Aave's USDC rate has a 5.3% median since 2023 but reached 28% on a daily average. Spikes are short, but a few days at those rates erase weeks of spread.
+- **Plumbing.** Borrowing on Aave (Ethereum) and depositing on Hyperliquid means a bridge, two sets of smart contracts and Hyperliquid's validator set. HyperEVM lending markets remove the bridge but have shorter rate histories.
+- **Data granularity and hindsight.** Hyperliquid publishes about 100 snapshots of HLP's history, 7 to 14 days apart, so short drawdowns between snapshots are smoothed out. I also chose HLP knowing it survived. Gas, bridge fees and taxes are ignored.
+
+## What I take from it
+
+- **The core idea holds.** An uncorrelated USDC yield funded by a moderate loan against BTC improved returns without deepening the drawdown, which the same loan spent on more BTC could not do.
+- **Rebalancing is the risk management.** The static position opened at the top was liquidated; the monthly one never went above 52% LTV. I would add a trigger on top: repay immediately from a reserve if LTV passes 55%.
+- **Judge the spread over 6 to 12 months.** A three-month filter (exit when HLP trails the borrow rate) would have closed the trade in mid-January 2026, about three weeks before the February window that paid for most of this year's carry.
+- **Size the loan for HLP going to zero.** If losing the HLP sleeve would force a BTC sale at the bottom, the loan is too big.
+
+HLP behaves like insurance for a Bitcoin holder: it pays out in chaos and earns little in calm markets. Holding it with borrowed money is a bet that crashes keep happening and that Hyperliquid keeps getting paid for them. So far that bet has paid. The open question is how much it will keep paying as more capital crowds into the vault.
+
+## Methodology
+
+- **BTC:** Binance BTC/USDT daily closes, with daily lows used for liquidation checks.
+- **Borrow rate:** Aave v3 Ethereum USDC variable rate, daily average of `ReserveDataUpdated` events ([Dune query](https://dune.com/queries/8907946)), accrued daily on the outstanding loan.
+- **HLP:** Hyperliquid `vaultDetails` API for vault `0xdfc2…f303`. Each snapshot interval's return uses the Modified Dietz method so deposits and withdrawals do not count as performance, then is spread evenly over the days of the interval.
+- **Liquidation:** 78% threshold on the daily low, 50% of the debt closed per event, 5% penalty on seized BTC. HLP does not count as collateral.
+- **Costs:** 10 bp on every BTC trade.
+
+*This is a personal research note and not investment advice.*
