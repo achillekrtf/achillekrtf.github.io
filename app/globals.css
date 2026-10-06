@@ -1,0 +1,90 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-ink: #121416;
+  --color-surface: #191c1f;
+  --color-raised: #202428;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-line-strong: rgb(255 255 255 / 0.16);
+  --color-fg: #ececec;
+  --color-muted: #8b9098;
+  --color-faint: #5d636b;
+  --color-amber: #f2a65a;
+  --color-amber-deep: #c96f2e;
+
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html {
+  background: var(--color-ink);
+  color: var(--color-fg);
+  -webkit-font-smoothing: antialiased;
+  scroll-behavior: smooth;
+}
+
+::selection {
+  background: rgb(242 166 90 / 0.35);
+}
+
+/* Small mono label, uppercase and tracked. */
+.label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.label-chip {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+}
+
+/* Blueprint grid used behind panels. */
+.grid-bg {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Long-form content (MDX). */
+.prose-site {
+  --tw-prose-body: #c9ccd1;
+  --tw-prose-headings: #f2f2f2;
+  --tw-prose-links: var(--color-amber);
+  --tw-prose-bold: #f2f2f2;
+  --tw-prose-code: #f2f2f2;
+  --tw-prose-pre-bg: var(--color-surface);
+  --tw-prose-th-borders: var(--color-line-strong);
+  --tw-prose-td-borders: var(--color-line);
+  --tw-prose-hr: var(--color-line);
+  --tw-prose-quotes: #c9ccd1;
+  --tw-prose-quote-borders: var(--color-amber);
+  --tw-prose-bullets: var(--color-faint);
+  --tw-prose-counters: var(--color-faint);
+  --tw-prose-captions: var(--color-muted);
+}
+
+.prose-site h2,
+.prose-site h3 {
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.prose-site img {
+  border-radius: 12px;
+  border: 1px solid var(--color-line);
+}
+
+.prose-site table {
+  font-size: 0.92em;
+}

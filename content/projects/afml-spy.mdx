@@ -1,0 +1,51 @@
+---
+title: "Financial ML on SPY, with VIX-adaptive triple barriers"
+summary: "Lopez de Prado's AFML pipeline applied to SPY 2010-2023: triple-barrier labels, meta-labeling, purged walk-forward CV, and an original extension that adapts the barriers to the VIX regime."
+tags: ["Quant", "Machine learning", "Backtest"]
+date: "2026"
+order: 1
+shape: "bars"
+repo: "https://github.com/achillekrtf/AFML_Public"
+---
+
+Most machine-learning approaches to price prediction fail for reasons that have nothing to do with the model: noisy fixed-horizon labels, cross-validation folds that leak future information, and backtests that trade on a signal before it could have existed. This project implements the framework from Marcos Lopez de Prado's *Advances in Financial Machine Learning* step by step, on SPY from 2010 to 2023, and adds one extension of my own.
+
+## Pipeline
+
+| Step | Method | Why it matters |
+|---|---|---|
+| 1 | Triple-barrier labeling | Labels scaled to each day's volatility |
+| 2 | **VIX-adaptive barriers** | Asymmetric profit and stop thresholds by market regime (my extension) |
+| 3 | Meta-labeling | Separates *direction* (simple model) from *confidence* (ML model) |
+| 4 | Purged walk-forward CV | Time-respecting folds with an embargo gap |
+| 5 | RF + XGBoost ensemble | Decision threshold tuned to maximise the Sharpe ratio |
+| 6 | Realistic backtest | 1-day signal lag, 5 bps costs, probability-weighted sizing |
+
+![Triple-barrier labeling on SPY](/images/afml/02_triple_barrier.png)
+
+## The extension: VIX-adaptive barriers
+
+The standard triple barrier uses symmetric, fixed multipliers. In stressed regimes that produces many timeouts, which are uninformative labels. Here the barrier widths follow the VIX regime, using an expanding median so that each day only sees the past:
+
+```text
+High VIX:  profit-take = 2.0 x vol,  stop-loss = 1.0 x vol   (let winners run, cut losses fast)
+Low VIX:   profit-take = 1.5 x vol,  stop-loss = 1.5 x vol   (balanced)
+```
+
+Timeout labels drop from **22% to 2%**: almost every sample gets a directional label.
+
+![Label distribution with VIX-adaptive barriers](/images/afml/03_label_distribution.png)
+
+## Results
+
+<Metrics items={[["0.89", "Sharpe (0.58 buy & hold)"], ["-8.9%", "Max drawdown (-24.5%)"], ["36.5%", "Average exposure"], ["2.44", "Sharpe per unit of exposure"]]} />
+
+![Backtest: meta strategy against buy & hold](/images/afml/08_backtest_curve.png)
+
+Total return is lower than buy & hold (16.7% against 27.4%), but per unit of capital deployed the strategy is about four times more efficient on a risk-adjusted basis, and the capital it leaves free can carry other, uncorrelated strategies.
+
+## Honesty check
+
+Without the one-day signal lag, the same pipeline shows a Sharpe above 2.0. With the lag, which is what a real trader would face, it is 0.89. That gap is the most common source of false alpha in financial ML papers, and the reason every number above is computed with the lag.
+
+![Feature importance](/images/afml/06_feature_importance.png)
