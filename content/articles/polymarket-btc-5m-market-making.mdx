@@ -3,6 +3,7 @@ title: "Market making Polymarket's 5-minute Bitcoin markets"
 summary: "A backtest on 8,640 markets and 12.9 million trades. Makers as a group earn a thin edge, mostly from fee rebates. A simulated quoter looked profitable until I found that trade timestamps arrive 2.2 seconds late; with a realistic latency, every configuration loses."
 tags: ["Polymarket", "Market making", "Backtest"]
 date: "2026-10-07"
+repo: "https://github.com/achillekrtf/polymarket-mm-backtest"
 ---
 
 Every five minutes, Polymarket opens a new market on one question: will Bitcoin be higher at the end of the next five minutes than at the start? That makes 288 markets a day on BTC alone, about $6.9M of trading per day, and a market structure that looks made for a market maker: retail-sized orders (the median trade is $4.55), a known resolution source, and a fee schedule that pays makers and charges takers.
