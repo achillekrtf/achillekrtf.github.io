@@ -1,0 +1,99 @@
+---
+title: "Does VPIN detect toxic flow? Testing my bot's filter on 12 million trades"
+summary: "My Polymarket bot paused quoting when VPIN went above 0.7. On a month of BTC 5-minute markets, that threshold was crossed on 99% of trades. Recalibrated, VPIN carries a little information about toxic fills, far less than the time left in the window or the trade size, and not enough to turn a quoter profitable."
+tags: ["Polymarket", "Market making", "Microstructure"]
+date: "2026-10-07"
+repo: "https://github.com/achillekrtf/polymarket-mm-backtest"
+---
+
+VPIN, the volume-synchronized probability of informed trading, is one of the best-known toxicity measures in market microstructure. The idea is simple: cut the trade flow into buckets of equal volume, measure how one-sided each bucket is, and average over the last few buckets. When the flow becomes one-sided, someone probably knows something, and a market maker should step back.
+
+My bot for Polymarket's BTC 5-minute markets had exactly that filter. It reduced its confidence in its fair value above a VPIN of 0.3, stopped quoting above 0.7 and liquidated its inventory above 0.85. I removed it in a later version. This article tests whether it ever worked, on the same data as my [market making backtest](/articles/polymarket-btc-5m-market-making/): 8,640 markets, 12.2 million in-window trades, $191M of notional.
+
+## The test
+
+| | |
+|---|---|
+| My bot's VPIN | Up-token trades only, $5 buckets, average over the last 20 buckets, as in the original code |
+| Full-flow VPIN | Both tokens mapped to Up (buying Down is selling Up), with $5, $50 and $500 buckets |
+| Trade side | Known exactly: Polymarket reports which side was the taker, so no classification is needed |
+| Toxicity | For each trade, the move of my spot-based fair value against the maker over the next 30 seconds, in bp of notional |
+| Timing | VPIN is measured from the trades before each one. Fair values are aligned to the match time, 2.2 seconds before the API timestamp |
+
+Polymarket is an unusually clean setting for VPIN. In equity markets the side of each trade has to be estimated from price changes, which is a common criticism of the measure. Here it is given.
+
+## Problem 1: the threshold was always crossed
+
+![Share of trades with VPIN above 0.7, by bucket size](/images/vpin/saturation.png)
+
+My bot's VPIN had a median of 0.97 and was above 0.7 on 99% of trades. Its pause rule would have kept it out of the market almost all the time, and its liquidation threshold of 0.85 was crossed on 89% of trades.
+
+The cause is the bucket size. The median trade is $4.50 and the average is $15.70, so a single trade fills several $5 buckets at once, all on the same side. A bucket filled by one trade has an imbalance of 1 by construction. At that size, VPIN mostly counts how often trades are larger than $5. With $500 buckets the median drops to 0.45, and only 6% of trades are above 0.7.
+
+The bot also ignored half the flow. It only tracked the Up token, while buying the Down token is economically the same trade as selling Up.
+
+## Problem 2: the signal depends on how you measure it
+
+Once VPIN has a usable range, the next question is whether it predicts what it is supposed to predict.
+
+![Adverse move against the maker by VPIN decile](/images/vpin/deciles.png)
+
+- **My bot's VPIN points the right way.** Trades in its top decile were followed by 86 bp of adverse move, against 40 bp in its bottom decile: a difference of 45 bp, with a 95% interval of 8 to 81 bp (bootstrap over markets).
+- **Full-flow VPIN points the other way.** With $50 or $500 buckets, high VPIN comes before *less* adverse selection: −52 bp (−80 to −24) and −56 bp (−89 to −27) between the top and bottom deciles.
+
+The full-flow result is the opposite of the theory, and the explanation is in what high-VPIN moments look like. In the top decile of $500-bucket VPIN, the average trade is $26.50 against $11.50 in the bottom decile, and BTC has moved less over the previous 10 seconds. One-sided flow in this market tends to be a few larger orders arriving in a quiet minute. Those orders are less informed than the small ones.
+
+## Problem 3: other variables explain more
+
+To separate VPIN from what it moves with, I regressed the 30-second adverse move on VPIN and five other variables, all standardized, with confidence intervals from a bootstrap over markets.
+
+![Effect of each variable on the 30-second adverse move](/images/vpin/drivers.png)
+
+- **Time left in the window** is the strongest predictor: one standard deviation later in the window adds 0.33¢ per share of adverse move. Near expiry, the outcome depends on fewer seconds of BTC, so each move shifts the probability more.
+- **A price near 50/50** adds 0.28¢. That is where a small BTC move changes the probability the most.
+- **Larger trades are less toxic** (−0.17¢), and so are trades in busy periods (−0.12¢).
+- **Neither VPIN measure is significant** once these are included. My bot's VPIN: +0.05¢ (−0.01 to +0.10). Full-flow VPIN: 0.00¢ (−0.06 to +0.07).
+
+All of this explains very little at the level of a single trade: the regression's R² is 0.0004. Thirty seconds of BTC is mostly noise, whatever you condition on.
+
+The signed version of VPIN, which keeps the direction of the imbalance, has a weak directional signal. After the most buy-heavy decile of flow, fair value rose 0.41¢ over the next 30 seconds; after the most sell-heavy decile, it fell 0.19¢. The correlation is 0.009, too small to trade on its own against a 1¢ tick and fees of up to 1.75¢ per share.
+
+## Problem 4: as a filter, it barely helps
+
+The final test is the one that matters for a bot: does pausing on high VPIN improve a quoter? I reused the simulated quoter from the previous article (quotes ±5¢ around the spot fair value, about 0.8 seconds of real latency, 20 shares per quote). Without any filter it lost $26,000 over the month.
+
+Two details make this test fair. First, every VPIN rule is compared with a random pause of the same length, since quoting less always changes the result. Second, I tested two kinds of pause: stopping all quotes, as my bot did, and stopping only the quotes that would add to the position while keeping the ones that reduce it.
+
+Stopping all quotes made things worse in every case. A random 20% pause increased the loss from $26,000 to $29,600, because inventory picked up just before a pause can no longer be unwound and has to be held to resolution. My bot's rule as coded quoted only 1% of the time and lost $1,500, but its fills were worse: −483 bp of traded volume, against −174 bp with no filter.
+
+Pausing only new positions gives a cleaner comparison.
+
+![VPIN filter against a random pause of the same length](/images/vpin/filter.png)
+
+| Pause on new positions | VPIN rule | Random, same share |
+|---|---|---|
+| 20% of the time (top 20% of my bot's VPIN) | −$27,500 | −$27,200 |
+| 87% of the time (VPIN above 0.85) | −$9,800 (−14,800 to −4,700) | −$16,900 (−25,500 to −9,000) |
+| 99% of the time (VPIN above 0.7) | +$960 (−450 to +2,330) | −$980 (−2,840 to +730) |
+
+At high thresholds, my bot's VPIN does better than chance: entering only when it is low gives fills that are less toxic than entering at random moments. The effect is real but small, the confidence intervals overlap, and the best version is a quoter that trades 1% of the time and roughly breaks even, at about $30 a day. Pausing on the top 20% of any signal, including recent BTC moves and full-flow VPIN, did not do meaningfully better than random timing.
+
+## What I take from it
+
+- **Calibrate the bucket to the trade size.** With buckets smaller than a typical trade, VPIN measures trade size and saturates. The original paper sizes buckets as a fraction of daily volume; $5 was a fraction of a single trade.
+- **Measure the whole flow.** On a binary market with two tokens, the Down book is half of the Up book's flow.
+- **Check the sign before using a toxicity measure.** The same formula pointed in opposite directions depending on one parameter. In this market, one-sided flow in a quiet minute is mostly large, uninformed orders.
+- **Simple variables explain more.** Time to expiry, distance from 50/50 and trade size predicted toxic fills better than either VPIN, at no cost.
+- **Test a filter against a random pause of the same length.** Quoting less always changes P&L, so a filter only earns its place if it beats random timing. A pause that also blocks your exit quotes can add losses on its own.
+
+Removing VPIN from my bot was the right call. The previous article's conclusion still holds: the problem with quoting these markets is speed, and no filter on recent flow changes that.
+
+## Methodology
+
+- **Data:** the dataset from the [market making article](/articles/polymarket-btc-5m-market-making/), 5 September to 4 October 2026, restricted to trades inside each 5-minute window (12.2 million trades).
+- **VPIN:** buckets of fixed notional; a trade larger than the remaining space is split across buckets at the current buy/sell mix, exactly as in my bot's tracker. VPIN is the mean of |buy − sell| / volume over the last 20 buckets, reset at the start of each market.
+- **Adverse move:** the change in the spot-based fair value over the 30 seconds after the match, signed against the maker, as a share of the trade's notional.
+- **Regression:** notional-weighted least squares on standardized variables; intervals from 200 bootstrap samples of whole markets.
+- **Quoter:** as in the previous article, with fills when a taker trade prints at the quoted price and latency of 3 seconds after the API timestamp (about 0.8 seconds after the match). Intervals on P&L come from a bootstrap over days; random pauses are averaged over three seeds.
+
+*This is a personal research note and not investment advice.*
