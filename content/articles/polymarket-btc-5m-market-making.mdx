@@ -1,108 +1,65 @@
 ---
 title: "Market making Polymarket's 5-minute Bitcoin markets"
-summary: "A backtest on 8,640 markets and 12.9 million trades. Makers as a group earn a thin edge, mostly from fee rebates. A simulated quoter looked profitable until I found that trade timestamps arrive 2.2 seconds late; with a realistic latency, every configuration loses."
+summary: "I backtested a market maker on a month of Polymarket's 5-minute Bitcoin markets. It looked profitable, until I found the trade timestamps were two seconds late."
 tags: ["Polymarket", "Market making", "Backtest"]
 date: "2026-10-07"
 repo: "https://github.com/achillekrtf/polymarket-mm-backtest"
 ---
 
-Every five minutes, Polymarket opens a new market on one question: will Bitcoin be higher at the end of the next five minutes than at the start? That makes 288 markets a day on BTC alone, about $6.9M of trading per day, and a market structure that looks made for a market maker: retail-sized orders (the median trade is $4.55), a known resolution source, and a fee schedule that pays makers and charges takers.
+Every five minutes, Polymarket opens a market on a single question: will Bitcoin be higher at the end of the next five minutes than at the start? There are 288 of them a day, and together they trade about $7 million. The orders are small, typically a few dollars, and the fee schedule charges takers while paying makers a rebate. On paper, it is a market built for someone who posts quotes on both sides and collects the spread.
 
-I built a bot for these markets earlier this year: a fair value from the Binance spot price, inventory skew, adverse-selection filters. This article asks the question that should have come first: could a two-sided quoter make money here at all, and how fast would it need to be?
+Earlier this year I wrote a bot to do exactly that. It priced each market from the Binance spot price, skewed its quotes when it held inventory, and tried to step aside when the flow looked informed. What I never did was check whether the idea could work at all. So I went back and did it properly, on a full month of data.
 
-## How the markets work
+## How these markets actually resolve
 
-| | |
-|---|---|
-| Resolution | Up if Chainlink's BTC/USD 60-second TWAP at the end of the window is at or above its value at the start |
-| Window | 300 seconds; trading opens hours before the window starts |
-| Taker fee | 0.07 × p × (1 − p) per share: 1.75¢ per share at a price of 50¢, which is 3.5% of the notional |
-| Maker fee | None. Makers receive 20% of taker fees as rebates |
+The first surprise came before any trading logic. Polymarket's rules say the market resolves on Chainlink's "TWAP" of the time range, compared with the price at the beginning. That sentence can be read several ways, and the reading matters, because it decides what a fair price is at any moment.
 
-The resolution rule matters for the model. Polymarket's description only says "TWAP of the time range ... greater than or equal to the price at the beginning". I tested four readings of it against Binance data. Comparing the average price of the last minute with the average of the minute before the window opened matched 97.5% of the 8,640 real outcomes; the next best reading matched 87.0%. The remaining 2.5% are near-ties where Binance and Chainlink disagree. In practice, the reference price is set before the window opens, and only the last minute decides the result.
+So I tested the readings against reality. Using Binance prices, I computed each candidate rule for all 8,640 markets between 5 September and 4 October and compared it with the official outcome. One reading stood out: the average price over the last minute of the window, compared with the average over the minute before the window opened. It matched 97.5% of the real results. The next best interpretation managed 87%, and the few misses were coin flips that Binance and Chainlink saw slightly differently.
 
-## Data
-
-<Metrics items={[["8,640", "Markets, 5 Sep to 4 Oct 2026"], ["12.9M", "Taker trades"], ["$205M", "Traded notional"], ["$3.86M", "Taker fees paid"]]} />
-
-- **Trades:** every taker trade in every BTC 5-minute market over 30 days, from Polymarket's public Data API (side, outcome, price, size, timestamp). Trades on the Down token are converted to the equivalent trade on Up, so every market has a single price.
-- **Outcomes:** from Polymarket's Gamma API. 50.3% of markets resolved Up.
-- **Spot:** Binance BTC/USDT one-second closes over the same period.
-- **Fair value:** at each second, the probability that the last-minute average ends above the reference, with BTC modelled as a random walk using the realised volatility of the previous 30 minutes.
+That changes how you think about the market. The reference price is locked in before the window even starts, and only the final minute counts. The first four minutes matter only because of where they leave Bitcoin going into the last one.
 
 ## Who makes money
 
-Takers lost about $4.0M over the month: $3.86M in fees and $170k to the makers on the other side. Polymarket kept $3.09M after paying $0.77M of rebates. Fees averaged 188 basis points of traded notional, which is larger than any edge discussed below.
+I pulled every trade from Polymarket's public API: almost 13 million of them over the month, for about $205 million of volume. The first thing the data shows is where the money goes. Takers paid $3.9 million in fees. The fee is largest when the price sits near 50 cents, where it costs 1.75 cents per share, or 3.5% of what you pay. Polymarket gave about a fifth of that back to makers as rebates and kept the rest.
 
-To measure what makers earned, I took the other side of every taker trade and compared its price with my spot-based fair value at the moment of the fill, a few seconds later, and at resolution.
+The makers on the other side of those trades did well in the first instant and much less well afterwards. I compared each fill with a fair value built from the Binance price. At the moment of the trade, makers were buying about one percent below fair value and selling about one percent above. Thirty seconds later, half of that edge was gone. By the time the market resolved, almost nothing was left.
 
 ![Maker P&L vs fair value at the fill, 5 and 30 seconds later, and at resolution](/images/polymarket-mm/markout.png)
 
-- **At the fill, makers trade 108 bp better than fair value.** Takers pay a wide spread.
-- **Most of it is gone within 30 seconds.** The price moves in the taker's direction after the trade. That is adverse selection: takers who trade aggressively tend to know where BTC just moved.
-- **At resolution, makers keep 5.5 bp**, with a 95% confidence interval of −9 to +20 bp (bootstrap over markets, since trades in one market share one outcome). Without rebates, market making here is roughly break-even.
-- **Rebates add 36 bp**, bringing makers to +42 bp (27 to 56). The edge that survives is mostly the fee subsidy.
+This is adverse selection in its plainest form. The people who cross the spread are often reacting to a move in Bitcoin that the resting quotes have not caught up with yet. Once you add the rebates, makers as a group end up slightly positive, but the rebate is doing most of the work. Without it, making markets here is close to break-even.
 
-My spot model also turned out to be a worse forecaster than the market. On in-window trades, the Brier score of the traded price was 0.162 against 0.170 for the model, and the market's prices were well calibrated in every 10-cent bucket. Whoever sets these prices already sees Binance and reacts to it.
+There was a second, humbler finding. My fair value was a worse forecaster than the market itself. Whoever sets these prices already sees Binance, and reacts to it faster than my model does.
 
-## A simulated quoter
+## A quoter that looked too good
 
-The aggregate numbers describe makers who are first in the queue. I wanted to know what a new quoter would earn, so I simulated one on every market.
+Knowing what makers earn on average does not tell you what a newcomer would earn, because a newcomer is rarely first in line. So I simulated one. It quoted around my fair value, held whatever it bought until the market resolved, and got filled whenever a real trade printed at its price. I tried several spreads and several reaction delays.
 
-| Setting | Value |
-|---|---|
-| Center | Either my spot fair value, or an EWMA of recent trade prices |
-| Quotes | Bid and ask at center ± 1¢, 2¢, 3¢ or 5¢, rounded to the tick, skewed by inventory |
-| Size | 20 shares per quote, inventory capped at 100 shares, held to resolution |
-| Fills | When a taker trade prints at my price (or, in the strict version, through it), up to the traded size |
-| Latency | Quotes use information from L seconds before each trade |
-| Stops | No quotes in the last 15 seconds, or when the center is below 4¢ or above 96¢ |
+The first run produced a winner. Quoting five cents either side of fair value, with one second of delay, it made about $36,000 over the month and was profitable on almost three days out of four. The tightest spreads lost money, and so did every version that simply followed recent trade prices. Adding two more seconds of delay made every configuration lose.
 
-The first run produced a winner. Quoting ±5¢ around the spot fair value with a one-second latency made $36,300 over 30 days, positive on 73% of days. Spreads of 2¢ or less lost, the trade-following quoter lost everywhere, and three seconds of latency turned every configuration negative.
+That cliff between one and three seconds bothered me. Real edges rarely appear and disappear that sharply.
 
-That cliff between one and three seconds was suspicious.
+## The two-second trap
 
-## The 2-second trap
+The timestamps in Polymarket's API record when a trade settled on the Polygon blockchain. The trade itself was matched a little earlier, off-chain. If that gap is large, a quoter that "reacts after one second" in my simulation is actually reacting to Bitcoin moves that happened after the trade.
 
-The Data API's timestamp is the time the trade settled on Polygon. The trade was matched off-chain a little earlier. If that gap is large, a "one-second latency" in my simulation means quoting with spot prices from after the trade was already matched.
-
-I checked it two ways. First, I shifted the spot model in time and measured how well its changes explain changes in trade prices.
+I checked this two ways. First, I shifted my fair value back and forth in time and looked at how well its changes explained changes in trade prices. The fit was best with a shift of three seconds into the past. That was either a real, slow market that a fast bot could exploit, or a clock problem in my data.
 
 ![Correlation between trade price changes and spot-model changes, by time shift](/images/polymarket-mm/timestamp-lag.png)
 
-The correlation peaks when the spot model is shifted 3 seconds earlier (0.58, against 0.09 with no shift). Either the market reacts to Binance with a 3-second lag, which would be a real opportunity, or the timestamps are late, which would be a bug in my backtest.
+To find out which, I recorded one live market through Polymarket's websocket, which reports trades at the moment they are matched, and matched its 394 trades with the same trades in the API using their transaction hashes. The API was 2.2 seconds late on average. Add the half second it takes to align with one-second Binance candles, and the three-second shift is fully explained. The market reacts to Bitcoin in well under a second. My simulation had been quietly looking into the future.
 
-Second, I recorded one live market through Polymarket's websocket, which reports trades at match time, and matched all 394 trades to the Data API by transaction hash. The API timestamps were 2.2 seconds late on average (from 1.0 to 3.5 seconds). Add half a second for the alignment of one-second Binance candles, and the 3-second peak is fully explained. The market reacts to Binance in well under a second.
-
-With that delay subtracted, the latency curve reads differently.
+With the delay corrected, the picture flips. Everything that made money did so only when it could see where Bitcoin went after the trade. At any realistic reaction time, every configuration lost. The best one, a wide quote with under a second of delay, still lost around $870 a day.
 
 ![Simulated quoter P&L per day against real quote latency](/images/polymarket-mm/latency.png)
 
-| Quoter (±5¢, fill at my price) | Real latency | P&L per day | bp of my volume |
-|---|---|---|---|
-| Spot fair value | −1.2 s (looks ahead) | +$1,211 | +240 |
-| Spot fair value | −0.2 s (looks ahead) | +$277 | +57 |
-| Spot fair value | 0.8 s | −$868 | −174 |
-| Spot fair value | 2.8 s | −$3,266 | −554 |
-| Trade-following | 0.8 s | −$3,489 | −597 |
+## What it means
 
-Every configuration with a realistic latency loses money, across all four spreads and both fill rules. The only profitable rows are the ones where the simulation knew where BTC went after the trade.
+I set out to tune a quoter for these markets, and the backtest pointed somewhere else entirely. The spread is wide and it does get captured, but by whoever is fastest. A bot that needs even a second to react gets filled precisely when it would rather not be. The rebates keep the professional makers slightly ahead, and the takers, paying close to two percent in fees on average, fund all of it.
 
-## What I take from it
+The lesson I will keep is about the timestamps. A delay of two seconds produced a strategy that won three days out of four, and confirming it took one live market and about ten minutes. I now check the clock before I trust any result that depends on speed.
 
-- **The spread is real, and it belongs to whoever is fastest.** Makers capture 108 bp at the fill and lose most of it within seconds. A quoter that updates within a second still gets picked off when BTC moves.
-- **Rebates are most of the surviving edge.** Without them, makers as a group break even within the confidence interval.
-- **Check timestamps before trusting a latency result.** A 2.2-second reporting delay produced a strategy with a 73% daily win rate. Measuring the delay against a live feed took one market and ten minutes.
-- **The fees fall on takers.** At 188 bp on average, a taker strategy needs a large and very fast edge before it breaks even.
+## How I did it
 
-I set out to tune a two-sided quoter for these markets. The backtest points to speed instead: at retail infrastructure speeds, the fills you get are the ones you did not want.
-
-## Methodology and limits
-
-- **One-second resolution.** Trades, quotes and spot are all aligned to the second, so the simulation cannot represent sub-second competition. Professional makers here operate in milliseconds.
-- **Queue position is ignored.** A fill at my price assumes I was first in line at that level. The strict version, which requires the trade to go through my price, is more conservative and loses more.
-- **Rebates are approximated** as 20% of the fee each fill generated. Polymarket distributes the pool daily, and the exact allocation may differ.
-- **The fair value uses Binance as a proxy for Chainlink**, which matches 97.5% of outcomes. The disagreements are concentrated near 50/50, where they matter most.
-- **One month of data.** The Data API only keeps about a month of trade history, so this covers 5 September to 4 October 2026. Some prices in the API are averages across several levels of the book (about 11% of trades); I use the average as given, which is less extreme than the worst level reached and so errs toward fewer fills.
+Trades and outcomes come from Polymarket's public Data and Gamma APIs, and Bitcoin prices from Binance at one-second resolution. Down-token trades are converted into the equivalent trade on the Up token, so each market has a single price. The fair value treats Bitcoin as a random walk, uses the previous half hour of volatility, and applies the last-minute rule described above. Confidence intervals come from resampling whole markets, since trades within one market share the same outcome; the makers' result at resolution is not distinguishable from zero without rebates. The simulation works at one-second resolution, assumes my quote is first in line at its price, and approximates rebates as a fifth of the fee each trade generated. It covers a single month, because the API only keeps about that much history. The code and the data are on GitHub.
 
 *This is a personal research note and not investment advice.*
