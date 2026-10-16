@@ -26,12 +26,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <header className="sticky top-0 z-30 border-b border-line bg-ink/80 backdrop-blur-md">
           <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
             <Link href="/" className="flex items-center gap-2.5 font-medium tracking-tight text-fg">
-              <span aria-hidden className="grid h-5 w-5 grid-cols-2 gap-[2px]">
-                <span className="rounded-[2px] bg-accent" />
-                <span className="rounded-[2px] border border-accent/60" />
-                <span className="rounded-[2px] border border-accent/60" />
-                <span className="rounded-[2px] bg-accent/40" />
-              </span>
+              {/* three linked blocks, echoing the hero animation */}
+              <svg aria-hidden viewBox="0 0 34 12" className="h-4 w-auto" fill="none" stroke="var(--color-accent)">
+                <rect x="1" y="2" width="8" height="8" rx="1.5" fill="var(--color-accent)" stroke="none" />
+                <path d="M9 6h4M21 6h4" strokeOpacity="0.6" />
+                <rect x="13.5" y="2.5" width="7" height="7" rx="1.5" />
+                <rect x="25.5" y="2.5" width="7" height="7" rx="1.5" strokeOpacity="0.5" />
+              </svg>
               Achille Krotoff
             </Link>
             <nav className="flex items-center gap-6 font-mono text-xs uppercase tracking-wider text-muted">
