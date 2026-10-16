@@ -1,0 +1,108 @@
+---
+title: "Selling Bitcoin volatility, but only when it is expensive"
+summary: "Bitcoin options usually cost more than the moves they insure. Selling a one-day straddle every morning barely broke even after the spread. Selling it only when implied volatility sat well above a simple forecast doubled the notional in four years, with half the drawdown. Machine learning models matched that rule at best."
+tags: ["Options", "Volatility", "Backtest"]
+date: "2026-10-16"
+repo: "https://github.com/achillekrtf/vol-surface-spot"
+---
+
+In my [previous article](/articles/btc-vol-surface-ml/) I rebuilt the Bitcoin options surface for five years and found two things. It cannot tell you whether Bitcoin will go up or down. It does help forecast how much Bitcoin will move, and it is usually too expensive: implied volatility sat above the volatility that followed on three days out of four.
+
+That second finding is the oldest trade in options. If insurance is overpriced on average, you sell it. The catch is that selling volatility pays a little most days and loses a lot on a few. So the question is whether the forecast from the first study can help pick the days when the insurance is overpriced by enough to be worth selling.
+
+## The trade
+
+The simplest way to sell volatility is a straddle: you sell a call and a put at the same strike, at the current price. You collect a premium, and at expiry you pay back however far the price has moved, in either direction. If Bitcoin ends where it started, you keep everything. If it moves more than the premium, you lose the difference.
+
+Deribit lists options expiring every day at 08:00 UTC, so I tested the shortest version. Every morning at 08:00, sell the straddle that expires the next morning, on one Bitcoin of notional, and hold it to expiry. The entry price comes from the option trades of the previous hour: I take the at-the-money implied volatility of that expiry, give up one volatility point for the bid-ask spread, and price the straddle with Black-Scholes. Settlement uses the average Bitcoin price between 07:30 and 08:00, the same window Deribit uses. Fees follow Deribit's schedule.
+
+```python
+prem = straddle(S0, S0, iv - haircut, T)          # what I collect, in dollars
+payoff = abs(ST - S0)                              # what I pay back at expiry
+fees = (2 * FEE_TRADE + FEE_SETTLE) * S0
+pnl = (prem - payoff - fees) / S0                  # in % of one Bitcoin
+```
+
+On an average day from July 2022 to October 2026, that straddle was worth 1.8% of the Bitcoin price. The average absolute move over the next 24 hours was 1.7%. The whole trade lives in that gap, and fees take most of what is left.
+
+## Selling every day
+
+Selling every morning made money on 62% of days and ended with a total of 19% of the notional over four years. That is close to nothing for the risk involved. The equity curve went up 40% in the first six months, gave it all back in 2023, and spent the following three years moving sideways in large swings. The maximum drawdown was 44% of the notional.
+
+The losses explain the shape. The five worst days together cost 47%, more than the strategy earned over the whole period. The worst was 5 August 2024, when Bitcoin fell 13% overnight and the straddle sold the previous morning lost 11% of the notional. On days like that, a year of small premiums disappears.
+
+## Selling only when it looks expensive
+
+The first study gives a forecast of how volatile the next day will be, based on the volatility of the past day, week and month. This is the HAR model, and its forecasts were made out of sample, with monthly refits on past data only. The rule is simple: sell the straddle only when the implied volatility is above that forecast. I tested three thresholds, decided in advance: any amount above, 5 points above, and 10 points above.
+
+```python
+sell_today = iv > har_forecast + threshold
+```
+
+On these days, implied volatility averaged 45% and the HAR forecast 40%. Implied volatility was above the forecast on 71% of days, more than 5 points above on 47%, and more than 10 points above on a quarter of them.
+
+![Cumulative P&L of selling a one-day straddle every morning, or only when implied vol is above the HAR forecast](/images/straddle-selling/straddle-cumulative.png)
+
+The filter changes the result a lot. Selling only when implied volatility was 5 points above the forecast meant trading on 637 days instead of 1,364, and it earned 108% of the notional instead of 19%. The maximum drawdown fell from 44% to 21%. At 10 points, the strategy traded on only 336 days and earned about the same, 106%, with a drawdown of 18%. In both cases the average gain per trade is clearly above zero once you account for the uncertainty: about 0.17% per trade at 5 points and 0.31% at 10 points.
+
+The filter does not protect against large moves. It skipped the August 2024 crash, but only by luck: implied volatility was 3 points above the forecast that morning, enough for the loosest rule, not for the stricter ones. On 23 October 2023, implied volatility was 20 points above the forecast, the straddle was sold, and Bitcoin rose 11% overnight, a loss of 9% of the notional. What the filter does is skip the many quiet days when the premium was too thin to pay for the next accident.
+
+The gains are also uneven over time. Half of what the 5-point version earned came in 2024, a year of rising prices and expensive options. In 2025 it made almost nothing. The 10-point version has been mostly flat since early 2025, because implied volatility rarely sat that far above the forecast.
+
+## The spread decides
+
+My entry price assumes I can sell at the implied volatility at which options actually traded, minus one point. That is a plausible cost for crossing half the spread on an at-the-money daily option, but it is an assumption, so I tested what happens with no cost and with three points.
+
+![Total P&L by rule for different spread costs](/images/straddle-selling/straddle-spread.png)
+
+Selling every day only works if you trade almost for free. Give up three volatility points and it loses 95% of the notional. The filtered versions hold up much better, because the premium they collect is bigger: at 10 points above the forecast, the strategy still earns 78% with a three-point cost. This is the real reason the filter helps. It concentrates the trading on the days when the margin is wide enough to survive the spread.
+
+## Letting a model decide
+
+The rule above has a single input, the gap between implied volatility and the HAR forecast, and a threshold I chose by hand. The natural next step is to let a model decide. I gave it everything I had at 08:00: the implied volatility of the straddle and its gap to past realized volatility over a day, a week and a month, the rest of the surface from the first study (DVOL, term structure, skew and butterflies), recent returns, and the option order flow of the previous hour. The model predicts the P&L of the straddle, and I sell when the prediction is positive. Like the HAR forecast, it is refitted every month on straddles that had already expired, and never sees the month it trades.
+
+```python
+for m in pd.date_range(FIRST_TEST, d.index.max(), freq="MS"):
+    train = d.index + pd.Timedelta(days=1) <= m      # straddles already expired
+    test = (d.index >= m) & (d.index < m + pd.offsets.MonthBegin(1))
+    model = make().fit(d.loc[train, feats], d.loc[train, "pnl"])
+    preds[test] = model.predict(d.loc[test, feats])
+sell = preds > 0
+```
+
+I tried four models: a ridge regression and gradient-boosted trees predicting the P&L, and a logistic regression and gradient-boosted trees predicting the probability that the trade wins. Each one ran with three sets of inputs, from the volatility gaps alone to everything.
+
+![Cumulative P&L of the one-day straddle sold by a model, against the fixed rule](/images/straddle-selling/straddle-ml.png)
+
+The best model is the simplest. The ridge regression with all inputs sold on 478 days and ended at 108% of the notional, the same total as the 5-point rule, with a slightly smaller drawdown of 16% and a slightly larger average gain per trade. It avoided both the August 2024 crash and the October 2023 jump. Its largest weights tell the same story as the rule: high implied volatility, low realized volatility over the past week, plus some information from the skew. It mostly rediscovered the rule, and agreed with it on 292 of its 478 trades.
+
+The other eleven versions did worse than the rule. The gradient-boosted trees ended between 26% and 85%, and the classifiers that predict the probability of a win did no better. Predicting the sign of the trade throws away its size, and here the size is what matters: a straddle wins small most days and loses big on a few. With one trade a day, a noisy target and a few extreme losses, flexible models learn the accidents rather than the pattern. The same thing happened in the first study.
+
+Because I tried twelve versions, the best one is flattered by the choice. The honest summary is that machine learning matched the simple rule at best, and that the rule, with one input and a threshold set in advance, is the version I trust more.
+
+## The weekly version, and hedging
+
+I also tested the same idea on a weekly option: every Friday, sell the straddle that expires the following Friday. Without a hedge, the results are dominated by a few weeks. In March 2023 Bitcoin rose 30% in a week and one trade lost 24% of the notional. Over four years the strategy ended up 14%, with a drawdown of 78%.
+
+The usual way to remove that exposure is to delta-hedge: hold enough Bitcoin to cancel the straddle's sensitivity to the price, and rebalance as it moves. I did it every hour, with a cost of 3 basis points on each rebalancing trade.
+
+```python
+h = 2 * norm.cdf(d1) - 1          # Bitcoin held against the short straddle
+gains = (h * np.diff(S)).sum()    # hourly rebalancing until expiry
+```
+
+![Weekly straddle sold every Friday, naked and delta-hedged](/images/straddle-selling/straddle-weekly.png)
+
+Hedging does what it promises on risk. The worst week falls from minus 24% to minus 5%, and the drawdown from 78% to 12%. But the hedged strategy made all of its gains in the first eighteen months, and it ends at 17%. Since 2024 the line has drifted slightly down: what the straddle collects in premium, it pays back in hedging costs and moves between rebalances. With 221 weeks, and even fewer once a filter is applied, I cannot say much more than that.
+
+## What I take from it
+
+The volatility risk premium on Bitcoin is real, but it is thin. Selling it every day pays the market makers more than it pays you. A simple forecast of realized volatility turns it into something worth looking at, mainly by keeping you out of the market on the days when the premium does not cover the spread. A machine learning model given the whole surface found the same thing and did not improve on it.
+
+I would not trade this as it stands. One bad night can still cost 10% of the notional, the results depend heavily on 2024, and my entry prices are estimated from trades rather than taken from a real order book. The next step would be to record Deribit's order book for a few months and check what price the straddle can really be sold at, since that is the number this whole strategy depends on.
+
+## How I did it
+
+The data and forecasts are the same as in the first study: Deribit option trades, hourly Binance prices, and walk-forward HAR forecasts of realized volatility. The entry implied volatility is the at-the-money point of a smile fitted on the trades of the target expiry in the hour before 08:00 UTC. The strike is the spot price at entry, so the straddle is exactly at the money, which is slightly better than the listed strikes allow. Fees are 0.03% of the underlying per leg at entry and 0.015% per leg at settlement. Settlement uses the average of one-minute Binance prices between 07:30 and 08:00 UTC. P&L is measured in percent of one Bitcoin of notional, without margin, leverage or funding costs. Confidence intervals come from a block bootstrap of trades. The three thresholds were fixed before looking at the results, but they have not been tested on a separate period. The machine learning filters are trained on the P&L with a one-point cost, from April 2021, and use ridge regression, logistic regression and histogram gradient boosting with depth 3 and at least 60 trades per leaf; classifiers sell when the predicted probability of a win exceeds the win rate seen before the test period. The code is in the same repository as the first study.
+
+*This is a personal research note and not investment advice.*
