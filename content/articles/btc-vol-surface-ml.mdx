@@ -1,0 +1,101 @@
+---
+title: "Can the Bitcoin options surface predict spot?"
+summary: "I rebuilt Deribit's BTC volatility surface every four hours for five years and asked machine learning models to predict the next move. They cannot tell up from down, but implied volatility does improve forecasts of how much Bitcoin will move."
+tags: ["Options", "Volatility", "Machine learning"]
+date: "2026-10-16"
+repo: "https://github.com/achillekrtf/vol-surface-spot"
+---
+
+A few years ago I wrote a trading bot around one idea. When traders pay more for out-of-the-money puts than for equally distant calls, they are scared of a drop, and that fear should say something about where the price goes next. The bot compared the implied volatility of 25-delta calls and puts, smoothed the spread, and bought or sold the stock when it moved. It never got a real test, partly because I never had clean option data to test it on.
+
+Bitcoin solves the data problem. Deribit, where most BTC options trade, publishes every trade it has ever printed, with the implied volatility attached. So I went back to the question with five years of data and a proper setup: can the shape of the volatility surface, fed to a machine learning model, predict what spot does next?
+
+## Rebuilding the surface
+
+There is no free history of the BTC surface, so I rebuilt it. Every four hours since April 2021, I took all the option trades printed in the previous hour. That is 12,000 snapshots and about 5 million trades. The download is a simple loop over Deribit's history API:
+
+```python
+def window(t_ms):
+    """All option trades in [t - 1h, t), paginating on has_more."""
+    start, end, rows = t_ms - WINDOW_MS, t_ms - 1, []
+    while True:
+        r = get(dict(currency="BTC", kind="option", start_timestamp=start, end_timestamp=end,
+                     count=1000, sorting="asc", include_old="true"))
+        rows += r["trades"]
+        if not r["has_more"] or not r["trades"]:
+            break
+        start = r["trades"][-1]["timestamp"] + 1
+    ...
+```
+
+Each trade gives a strike, an expiry and an implied volatility. From the volatility I compute the option's delta, then for each expiry I fit a simple smile: implied volatility as a parabola in delta. Its value at 50 delta is the at-the-money volatility. The difference between the 25-delta call and the 25-delta put is the risk reversal, the exact signal my old bot traded. The average of the two wings above at-the-money is the butterfly, a measure of how much the market pays for large moves in either direction.
+
+```python
+def fit_expiry(g):
+    x = g["delta"].to_numpy() - 0.5
+    y = g["sigma"].to_numpy()
+    w = np.sqrt(g["amount"].to_numpy())
+    # the 25-delta points must sit inside the traded range, not be extrapolated
+    calls, puts = (x <= -0.18).sum(), (x >= 0.18).sum()
+    if len(g) >= 6 and calls >= 2 and puts >= 2:
+        a, b, c = np.polynomial.polynomial.polyfit(x, y, 2, w=w)
+        f = lambda z: a + b * z + c * z * z
+        rr, bf = f(-0.25) - f(0.25), (f(-0.25) + f(0.25)) / 2 - a
+        ...
+```
+
+My first version had no guard on the wings, and a few thin hours produced risk reversals of minus 150 volatility points, parabolas extrapolated far beyond the trades. Requiring trades on both sides of 30 delta removed them. The expiries are then interpolated to fixed horizons of 7, 30 and 90 days. As a sanity check, my 30-day at-the-money volatility has a correlation of 0.98 with DVOL, Deribit's own volatility index, and sits about five points below it, which is expected since DVOL also prices the wings.
+
+## What the options market already tells you
+
+Before any model, one picture explains most of what follows. Implied volatility is a forecast of how much Bitcoin will move over the next month. Over these five years it averaged 60%, while the volatility that actually followed averaged 52%. Options were more expensive than the moves they insured against on three days out of four. That gap is the volatility risk premium, and it is the reason selling options has been a classic way to earn a return.
+
+![BTC implied volatility (DVOL) against realized volatility over the following 30 days](/images/vol-surface/implied-vs-realized.png)
+
+The two lines also move together. When implied volatility jumps, realized volatility usually follows. So the surface clearly knows something about the size of future moves. The question I care about is whether it also knows the direction.
+
+## Asking the models for a direction
+
+I gave the models three sets of inputs. The first is price history alone: recent returns over 4 hours, a day and a week, plus realized volatility over a day, a week and a month. The second is the surface alone: DVOL, at-the-money volatility at three horizons, the slope between them, risk reversals and butterflies at 7 and 30 days, the gap between implied and realized volatility, and how DVOL and the risk reversal changed over the last day. The third is both. Each set goes into a regularized logistic regression and a gradient-boosted tree model, which predict whether BTC will be higher 4 hours, 24 hours or 7 days later.
+
+The test is strictly out of sample. Every month from July 2022 onwards, the models are retrained on all the past data whose outcome was already known, and they predict the month ahead. That last condition matters: a 7-day target from last Tuesday is not known until next Tuesday, and training on it would leak the future.
+
+```python
+for m in pd.date_range(FIRST_TEST, d.index.max(), freq="MS"):
+    test = (d.index >= m) & (d.index < m + pd.offsets.MonthBegin(1))
+    train = d.index + pd.Timedelta(hours=horizon_h) < m   # target fully realised before the test month
+    model = model_fn().fit(d.loc[train, feats], d.loc[train, target] > 0)
+    preds[test] = model.predict_proba(d.loc[test, feats])[:, 1]
+```
+
+The results are close to a coin flip. I measure them with the AUC, which is 0.5 for a random guess and 1 for a perfect forecast.
+
+![Out-of-sample AUC for the direction of BTC by horizon and set of inputs, with 95% intervals](/images/vol-surface/direction-auc.png)
+
+Over 4 hours, price history reaches an AUC of 0.53 and the surface 0.52. Both are statistically above 0.5, but adding the surface to price history barely moves the result. Over 24 hours, the intervals include 0.5 or only just clear it. On its own, the risk reversal has a correlation of about 0.02 with the next day's return, which is indistinguishable from zero. My old bot was trading noise.
+
+The 7-day horizon is the strangest result. All the models land below 0.5, between 0.43 and 0.46, which means they were wrong more often than chance. The breakdown by year shows why. The model trained on 2021 and 2022 learned that weeks following high realized volatility tended to end higher, a pattern from the crash and rebound of that bear market. In 2023 the relationship reversed, and the AUC that year fell to 0.34. With only about 50 independent weeks a year, a model can learn a strong rule that is simply a feature of one period.
+
+I also turned each model into a simple long or short position, held over the forecast horizon and charged 5 basis points for every change of position. None of them made money in a statistically meaningful way. Their Sharpe ratios ranged from about minus 1.3 to plus 0.4, while simply holding Bitcoin over the same period gave 0.7. The tree models did a little better on AUC over 4 hours and worse once trading costs were included.
+
+## Asking for the size of the move instead
+
+The surface is a forecast of volatility, so the fair test is to ask it about volatility. This time the target is the realized volatility of BTC over the next day and the next week. The benchmark is HAR, the standard model in this field: a linear regression on realized volatility over the past day, week and month. It is hard to beat because volatility clusters, and calm or turbulent periods tend to last.
+
+![Out-of-sample R² for realized volatility over the next 24 hours and 7 days](/images/vol-surface/vol-r2.png)
+
+Past realized volatility explains 38% of the variation in the next day's volatility, out of sample. Implied volatility alone does slightly better, at 40%. Together they reach 43%. Over a week the numbers are 48%, 50% and 53%. Put another way, adding implied volatility to HAR removes about 9% of its squared forecast error, and it does better in nine months out of ten over the next day.
+
+Two details surprised me. Adding the skew and the wings on top of at-the-money volatility adds nothing, and over a week it even makes the forecast slightly worse, because the risk reversal and butterfly are noisy and the model fits that noise. And gradient-boosted trees did worse than the linear model at both horizons. With a few thousand overlapping observations and a relationship that is close to linear in logarithms, a flexible model mostly adds variance.
+
+## What I take from it
+
+The options market prices how much Bitcoin will move, and it does so well enough to improve on the best simple model built from past prices. It does not price where Bitcoin will go, at least not in any way a model can extract after costs. That is what you would expect if the market is reasonably efficient: a reliable directional signal in such a visible place would be traded away, while a forecast of volatility is exactly what option prices are supposed to contain.
+
+The idea behind my old bot fails this test. The 25-delta spread moves a lot and looks like a signal on a chart, but over five years it says almost nothing about the next day. If I come back to this surface, it will be to trade volatility itself, for example by selling options when implied volatility is far above what HAR predicts, and that strategy needs a different backtest.
+
+## How I did it
+
+Option trades come from Deribit's public history API, hourly BTC prices from Binance and DVOL from Deribit. A snapshot at time t uses only trades printed in the previous hour, and missing fits are carried forward for at most eight hours. Deltas use the Deribit index price rather than the futures price of each expiry, which slightly shifts the 90-day wings; the main results use 7 and 30 days. Direction models are an L2-regularized logistic regression on standardized inputs and a histogram gradient-boosting classifier with depth 3 and at least 200 observations per leaf, refitted monthly with the target horizon embargoed. Volatility models predict the logarithm of realized volatility with ridge regression and the same tree model, and R² is measured against the historical mean known at the time. Confidence intervals come from a moving-block bootstrap with blocks of one or two weeks, since consecutive snapshots overlap. The code is on GitHub and rebuilds the full dataset in under an hour.
+
+*This is a personal research note and not investment advice.*

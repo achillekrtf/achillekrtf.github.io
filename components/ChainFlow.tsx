@@ -30,6 +30,9 @@ export default function ChainFlow() {
     const blue = (a: number) => `rgba(79,155,255,${clamp(a)})`;      // chain and transactions
     const amber = (a: number) => `rgba(242,166,90,${clamp(a)})`;     // sealing flash and value
     const slate = (a: number) => `rgba(148,170,200,${clamp(a)})`;    // grid
+    // Blue to amber, u in [0, 1].
+    const glow = (u: number, a: number) =>
+      `rgba(${Math.round(79 + 163 * u)},${Math.round(155 + 11 * u)},${Math.round(255 - 165 * u)},${clamp(a)})`;
     const frac = (x: number) => x - Math.floor(x);
     // Deterministic pseudo-random in [0, 1) from two integers.
     const hash = (a: number, b: number) => frac(Math.sin(a * 127.1 + b * 311.7) * 43758.5453);
@@ -72,14 +75,17 @@ export default function ChainFlow() {
       const shift = v * s;
       const kMin = Math.ceil((-S + shift) / S);
       const kMax = Math.floor((W + S + shift) / S);
-      const blocks: { x: number; y: number; fill: number; flash: number }[] = [];
+      const blocks: { x: number; y: number; fill: number; flash: number; seal: number }[] = [];
       for (let k = kMin; k <= kMax; k++) {
         const x = k * S - shift;
         const fill = Math.max(0, Math.min(1, (enterX - x) / (enterX - mineX)));
-        const flash = x < mineX ? Math.exp(-(mineX - x) / (S * 0.35)) : 0;
-        blocks.push({ x, y: chainY(x), fill, flash });
+        // The flash rises quickly once the block passes the mining point, then decays.
+        const d = mineX - x;
+        const flash = d > 0 ? (1 - Math.exp(-d / (S * 0.06))) * Math.exp(-d / (S * 0.4)) : 0;
+        // How sealed the block looks, eased in over the last stretch before the mining point.
+        const seal = smooth(-S * 0.25, S * 0.05, d);
+        blocks.push({ x, y: chainY(x), fill, flash, seal });
       }
-      const pending = blocks.filter((b) => b.x >= mineX).sort((a, b) => a.x - b.x)[0];
 
       // Links between consecutive blocks, with a small hash node in the middle.
       for (let i = 0; i < blocks.length - 1; i++) {
@@ -87,7 +93,7 @@ export default function ChainFlow() {
         const b = blocks[i + 1];
         const mx = (a.x + b.x) / 2;
         const my = (a.y + b.y) / 2;
-        const al = fade(mx) * (b.x > mineX ? 0.12 : 0.28);
+        const al = fade(mx) * (0.12 + 0.16 * b.seal);
         ctx.strokeStyle = blue(al);
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -105,8 +111,7 @@ export default function ChainFlow() {
       // Blocks: a front face with a hint of depth, transaction lines filling up inside.
       for (const b of blocks) {
         const f = fade(b.x);
-        const sealed = b.fill >= 1;
-        const edge = (sealed ? 0.42 : 0.2) + 0.5 * b.flash;
+        const edge = 0.2 + 0.22 * b.seal + 0.5 * b.flash;
         const x0 = b.x - B / 2;
         const y0 = b.y - B / 2;
         // depth faces
@@ -123,7 +128,7 @@ export default function ChainFlow() {
         // front face
         ctx.fillStyle = `rgba(16,22,30,${(0.9 * f).toFixed(3)})`;
         ctx.fillRect(x0, y0, B, B);
-        ctx.strokeStyle = b.flash > 0.2 ? amber(f * edge) : blue(f * edge);
+        ctx.strokeStyle = glow(Math.min(1, b.flash * 1.4), f * edge);
         ctx.lineWidth = 1 + b.flash;
         ctx.strokeRect(x0 + 0.5, y0 + 0.5, B, B);
         ctx.lineWidth = 1;
@@ -133,7 +138,7 @@ export default function ChainFlow() {
         for (let r = 0; r < rows; r++) {
           const w = Math.max(0, Math.min(1, filled - r)) * (B * 0.62) * (0.7 + 0.3 * hash(Math.round(b.x / S + shift / S), r));
           if (w <= 0) continue;
-          ctx.strokeStyle = blue(f * (0.25 + 0.35 * (sealed ? 1 : 0.6)));
+          ctx.strokeStyle = blue(f * (0.46 + 0.14 * b.seal));
           ctx.beginPath();
           const ly = y0 + B * (0.26 + r * 0.16);
           ctx.moveTo(x0 + B * 0.19, ly);
@@ -146,19 +151,23 @@ export default function ChainFlow() {
         }
       }
 
-      // Transactions streaming into the block being mined.
-      if (pending) {
+      // Transactions streaming in. Each dot aims for the block that will still be
+      // pending when it lands and follows that block as it drifts, so no dot ever
+      // jumps to a new target mid-flight.
+      {
         const N = narrow ? 14 : 26;
         for (let j = 0; j < N; j++) {
           const period = 2.4 + 1.6 * hash(j, 1);
           const phase = s / period + hash(j, 2);
           const cycle = Math.floor(phase);
           const u = frac(phase);
+          const landAt = (cycle + 1 - hash(j, 2)) * period;
+          const k = Math.ceil((mineX + v * landAt) / S);
           const fromTop = hash(j, cycle) < 0.5;
           const sx = W * (0.42 + 0.6 * hash(cycle, j + 7));
           const sy = fromTop ? -10 : H + 10;
-          const tx = pending.x;
-          const ty = pending.y;
+          const tx = k * S - shift;
+          const ty = chainY(tx);
           const cx = (sx + tx) / 2 + (hash(j, cycle + 3) - 0.5) * W * 0.25;
           const cy = fromTop ? ty - H * 0.2 : ty + H * 0.2;
           const e = u * u * (3 - 2 * u);

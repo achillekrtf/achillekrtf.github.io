@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 
 import "./globals.css";
 
-const sans = Hanken_Grotesk({ subsets: ["latin"], variable: "--font-hanken", weight: ["300", "400", "500", "600"] });
-const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains", weight: ["400", "500"] });
+const sans = Geist({ subsets: ["latin"], variable: "--font-geist", weight: ["300", "400", "500"] });
+const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", weight: ["400", "500"] });
 
 export const metadata: Metadata = {
   title: { default: "Achille Krotoff", template: "%s · Achille Krotoff" },
